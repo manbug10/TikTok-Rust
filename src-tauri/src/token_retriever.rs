@@ -11,7 +11,6 @@
 use base64::Engine;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use std::io::Write;
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
@@ -67,13 +66,19 @@ pub async fn wait_for_code(port: u16, timeout: Duration) -> Result<String, Strin
             }
         };
 
-        // Non-blocking polling loop so the thread can time out by itself.
-        let _ = server.set_nonblocking(true);
         let deadline = Instant::now() + timeout;
 
         loop {
-            match server.recv() {
-                Ok(request) => {
+            if Instant::now() >= deadline {
+                let _ = tx.send(Err(
+                    "Timed out waiting for the user to complete login.".to_string(),
+                ));
+                break;
+            }
+
+            // Poll with a short timeout so this thread can expire on its own.
+            match server.recv_timeout(Duration::from_millis(100)) {
+                Ok(Some(request)) => {
                     let url = request.url().to_string(); // "path?query"
                     let success = url.contains("success=true") && url.contains("code=");
                     let (body, code) = if success {
@@ -91,7 +96,6 @@ pub async fn wait_for_code(port: u16, timeout: Duration) -> Result<String, Strin
                         .with_status_code(code)
                         .with_header(header);
                     let _ = request.respond(response);
-                    let _ = server.flush();
 
                     let result = if success {
                         parse_query_code(&url)
@@ -105,14 +109,10 @@ pub async fn wait_for_code(port: u16, timeout: Duration) -> Result<String, Strin
                     let _ = tx.send(result);
                     break;
                 }
-                Err(_) if Instant::now() >= deadline => {
-                    let _ = tx.send(Err(
-                        "Timed out waiting for the user to complete login.".to_string()
-                    ));
+                Ok(None) => continue, // poll timeout — keep waiting until deadline
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Callback server error: {e}")));
                     break;
-                }
-                Err(_) => {
-                    std::thread::sleep(Duration::from_millis(50));
                 }
             }
         }
