@@ -1,0 +1,69 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci || npm install
+
+      - name: Build Tauri app (NSIS + MSI)
+        run: npm run tauri build
+
+      - name: Upload NSIS installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TikTok-Rust-Windows-NSIS
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Upload MSI installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TikTok-Rust-Windows-MSI
+          path: src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      - name: Read app version
+        id: ver
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          NSIS=$(ls src-tauri/target/release/bundle/nsis/*.exe)
+          MSI=$(ls src-tauri/target/release/bundle/msi/*.msi)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$NSIS" "$MSI" --clobber
+          else
+            gh release create "$TAG" "$NSIS" "$MSI" --title "TikTok Rust $TAG" --notes "Instaladores de Windows (NSIS y MSI) generados automaticamente por GitHub Actions. Binarios sin firmar: si SmartScreen muestra una advertencia, elige Mas informacion > Ejecutar de todas formas."
+          fi

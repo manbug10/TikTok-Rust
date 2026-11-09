@@ -1,0 +1,18 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Tauri
+src-tauri/target
+src-tauri/gen/schemas
+
+# Logs
+*.log
+
+# Editor
+.vscode
+.idea
+.DS_Store
